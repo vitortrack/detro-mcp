@@ -16,6 +16,10 @@ DECLARE
   s text;
   r text := current_setting('mcp.usuario');
 BEGIN
+  IF r = current_user OR (SELECT rolsuper FROM pg_roles WHERE rolname = r) THEN
+    RAISE EXCEPTION 'usuario=% é o dono das tabelas ou superusuário. Escolha um nome novo, só para o MCP (ex.: mcp_readonly).', r;
+  END IF;
+
   EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), r);
 
   FOR s IN

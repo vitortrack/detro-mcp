@@ -30,7 +30,8 @@ rodar de novo sem problema.
    ```bash
    docker exec <container_postgres> printenv POSTGRES_USER POSTGRES_DB
    ```
-3. Escolha um nome e uma senha para o usuário somente leitura e rode o script:
+3. Escolha um nome **novo** (ex.: `mcp_readonly`, nunca o dono das tabelas do passo 2)
+   e uma senha para o usuário somente leitura, e rode o script:
    ```bash
    cd ~/Documentos/projects/detro-mcp
    docker exec -i <container_postgres> psql -U <dono_das_tabelas> -d <banco> \
