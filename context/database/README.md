@@ -22,13 +22,12 @@ Dá ao Claude Code quatro ferramentas para olhar o banco de dev sem risco de alt
 ```bash
 git clone git@github.com:vitortrack/detro-mcp.git ~/Documentos/projects/detro-mcp
 cd ~/Documentos/projects/detro-mcp/context/database && npm install
-claude mcp add detro-db -s user -e 'DATABASE_URL=${DETRO_DB_URL}' -- node "$PWD/server.mjs"
+claude mcp add detro-db -s user -- node "$PWD/server.mjs"
 ```
 Com `-s user` o servidor aparece em qualquer pasta, junto dos outros MCPs. A
-conexão vem de `DETRO_DB_URL`, definida no shell (exemplo no README da raiz).
-Confira com `/mcp`.
+conexão vem do `.env` desta pasta (exemplo no README da raiz). Confira com `/mcp`.
 
 ## Variáveis
-- `DATABASE_URL`: conexão, vinda de `DETRO_DB_URL` (ver README da raiz)
+- `DATABASE_URL`: conexão, lida de `.env` nesta pasta (variável já definida no ambiente tem prioridade)
 - `MCP_DB_MAX_ROWS`: limite de linhas (padrão 200)
 - `MCP_DB_TIMEOUT_MS`: timeout por consulta (padrão 10000)

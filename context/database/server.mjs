@@ -3,6 +3,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import pg from "pg";
 import { z } from "zod";
+import { existsSync } from "node:fs";
+
+const ENV_FILE = new URL(".env", import.meta.url);
+if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const MAX_ROWS = Number(process.env.MCP_DB_MAX_ROWS ?? 200);
