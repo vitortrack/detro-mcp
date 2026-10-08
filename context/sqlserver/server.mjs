@@ -137,7 +137,7 @@ server.registerTool(
         if (id === null) throw new Error(`Tabela ${schema}.${name} não encontrada.`);
         const cols = await q(
           `SELECT c.name AS coluna,
-                  t.name + CASE
+                  t.name COLLATE DATABASE_DEFAULT + CASE
                     WHEN t.name IN ('varchar', 'char', 'varbinary', 'binary')
                       THEN '(' + IIF(c.max_length = -1, 'max', CAST(c.max_length AS varchar)) + ')'
                     WHEN t.name IN ('nvarchar', 'nchar')
@@ -146,7 +146,7 @@ server.registerTool(
                       THEN '(' + CAST(c.precision AS varchar) + ',' + CAST(c.scale AS varchar) + ')'
                     ELSE '' END AS tipo,
                   IIF(c.is_nullable = 1, 'sim', 'não') AS aceita_nulo,
-                  dc.definition AS [default],
+                  dc.definition COLLATE DATABASE_DEFAULT AS [default],
                   IIF(c.is_identity = 1, 'sim', 'não') AS [identity]
              FROM sys.columns c
              JOIN sys.types t ON t.user_type_id = c.user_type_id
@@ -157,7 +157,7 @@ server.registerTool(
         );
         const cons = await q(
           `SELECT kc.name AS nome, IIF(kc.type = 'PK', 'PK', 'UNIQUE') AS tipo,
-                  '(' + (SELECT STRING_AGG(c.name, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal)
+                  '(' + (SELECT STRING_AGG(c.name COLLATE DATABASE_DEFAULT, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal)
                            FROM sys.index_columns ic
                            JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
                           WHERE ic.object_id = kc.parent_object_id AND ic.index_id = kc.unique_index_id) + ')' AS definicao
@@ -165,10 +165,11 @@ server.registerTool(
             WHERE kc.parent_object_id = @p1
            UNION ALL
            SELECT fk.name, 'FK',
-                  '(' + STRING_AGG(pc.name, ', ') WITHIN GROUP (ORDER BY fkc.constraint_column_id) + ') REFERENCES ' +
-                  OBJECT_SCHEMA_NAME(fk.referenced_object_id) + '.' + OBJECT_NAME(fk.referenced_object_id) +
-                  ' (' + STRING_AGG(rc.name, ', ') WITHIN GROUP (ORDER BY fkc.constraint_column_id) + ') ON DELETE ' +
-                  REPLACE(fk.delete_referential_action_desc, '_', ' ')
+                  '(' + STRING_AGG(pc.name COLLATE DATABASE_DEFAULT, ', ') WITHIN GROUP (ORDER BY fkc.constraint_column_id) + ') REFERENCES ' +
+                  OBJECT_SCHEMA_NAME(fk.referenced_object_id) COLLATE DATABASE_DEFAULT + '.' +
+                  OBJECT_NAME(fk.referenced_object_id) COLLATE DATABASE_DEFAULT +
+                  ' (' + STRING_AGG(rc.name COLLATE DATABASE_DEFAULT, ', ') WITHIN GROUP (ORDER BY fkc.constraint_column_id) + ') ON DELETE ' +
+                  REPLACE(fk.delete_referential_action_desc COLLATE DATABASE_DEFAULT, '_', ' ')
              FROM sys.foreign_keys fk
              JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
              JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
@@ -176,16 +177,16 @@ server.registerTool(
             WHERE fk.parent_object_id = @p1
             GROUP BY fk.name, fk.referenced_object_id, fk.delete_referential_action_desc
            UNION ALL
-           SELECT name, 'CHECK', definition FROM sys.check_constraints WHERE parent_object_id = @p1
+           SELECT name, 'CHECK', definition COLLATE DATABASE_DEFAULT FROM sys.check_constraints WHERE parent_object_id = @p1
            ORDER BY 2, 1`,
           [id],
         );
         const idx = await q(
           `SELECT i.name AS nome,
-                  i.type_desc + IIF(i.is_unique = 1, ' UNIQUE', '') + ' (' +
-                  STRING_AGG(c.name + IIF(ic.is_descending_key = 1, ' DESC', ''), ', ')
+                  i.type_desc COLLATE DATABASE_DEFAULT + IIF(i.is_unique = 1, ' UNIQUE', '') + ' (' +
+                  STRING_AGG(c.name COLLATE DATABASE_DEFAULT + IIF(ic.is_descending_key = 1, ' DESC', ''), ', ')
                     WITHIN GROUP (ORDER BY ic.key_ordinal) + ')' +
-                  ISNULL(' WHERE ' + i.filter_definition, '') AS definicao
+                  ISNULL(' WHERE ' + i.filter_definition COLLATE DATABASE_DEFAULT, '') AS definicao
              FROM sys.indexes i
              JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0
              JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
