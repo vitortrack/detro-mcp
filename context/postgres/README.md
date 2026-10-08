@@ -21,7 +21,7 @@ Dá ao Claude Code quatro ferramentas para olhar o banco de dev sem risco de alt
 ## Instalação
 ```bash
 git clone git@github.com:vitortrack/detro-mcp.git ~/Documentos/projects/detro-mcp
-cd ~/Documentos/projects/detro-mcp/context/database && npm install
+cd ~/Documentos/projects/detro-mcp/context/postgres && npm install
 claude mcp add detro-db -s user -- node "$PWD/server.mjs"
 ```
 Com `-s user` o servidor aparece em qualquer pasta, junto dos outros MCPs. A

@@ -1,7 +1,7 @@
 -- Usuário somente leitura para o MCP detro-db. Rode UMA vez no banco de DEV:
 --   docker exec -i <container_postgres> psql -U <dono_das_tabelas> -d <banco> \
 --     -v usuario=<usuario_readonly> -v senha=<senha_readonly> -v ON_ERROR_STOP=1 \
---     < context/database/create-readonly-role.sql
+--     < context/postgres/create-readonly-role.sql
 -- Rode com o usuário dono das tabelas (o mesmo da API), para que o
 -- ALTER DEFAULT PRIVILEGES valha também para tabelas criadas depois.
 -- NÃO é um arquivo de db/init. Pode rodar de novo sem problema.

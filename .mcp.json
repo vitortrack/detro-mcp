@@ -2,7 +2,7 @@
   "mcpServers": {
     "detro-db": {
       "command": "node",
-      "args": ["context/database/server.mjs"]
+      "args": ["context/postgres/server.mjs"]
     }
   }
 }
