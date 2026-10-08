@@ -1,29 +1,33 @@
 -- Usuário somente leitura para o MCP detro-db. Rode UMA vez no banco de DEV:
---   docker exec -i udp-postgres psql -U tracker -d tracker -v ON_ERROR_STOP=1 \
+--   docker exec -i <container_postgres> psql -U <dono_das_tabelas> -d <banco> \
+--     -v usuario=<usuario_readonly> -v senha=<senha_readonly> -v ON_ERROR_STOP=1 \
 --     < context/database/create-readonly-role.sql
--- Rode com o usuário dono das tabelas (tracker, o mesmo da API), para que o
+-- Rode com o usuário dono das tabelas (o mesmo da API), para que o
 -- ALTER DEFAULT PRIVILEGES valha também para tabelas criadas depois.
 -- NÃO é um arquivo de db/init. Pode rodar de novo sem problema.
 
-DO $$
-DECLARE s text;
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'detro_readonly') THEN
-    CREATE ROLE detro_readonly LOGIN PASSWORD 'detro_readonly';
-  END IF;
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'usuario', :'senha')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'usuario') \gexec
 
-  EXECUTE format('GRANT CONNECT ON DATABASE %I TO detro_readonly', current_database());
+SELECT set_config('mcp.usuario', :'usuario', false);
+
+DO $$
+DECLARE
+  s text;
+  r text := current_setting('mcp.usuario');
+BEGIN
+  EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), r);
 
   FOR s IN
     SELECT nspname FROM pg_namespace
      WHERE nspname NOT IN ('pg_catalog', 'information_schema')
        AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp%'
   LOOP
-    EXECUTE format('GRANT USAGE ON SCHEMA %I TO detro_readonly', s);
-    EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO detro_readonly', s);
-    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT SELECT ON TABLES TO detro_readonly', s);
+    EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', s, r);
+    EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO %I', s, r);
+    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT SELECT ON TABLES TO %I', s, r);
   END LOOP;
-END $$;
 
-ALTER ROLE detro_readonly SET default_transaction_read_only = on;
-ALTER ROLE detro_readonly SET statement_timeout = '10s';
+  EXECUTE format('ALTER ROLE %I SET default_transaction_read_only = on', r);
+  EXECUTE format('ALTER ROLE %I SET statement_timeout = %L', r, '10s');
+END $$;

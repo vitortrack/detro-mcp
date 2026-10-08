@@ -15,19 +15,20 @@ Dá ao Claude Code quatro ferramentas para olhar o banco de dev sem risco de alt
 2. Aceita um único comando de leitura por chamada.
 3. Toda chamada roda em `BEGIN TRANSACTION READ ONLY` + `ROLLBACK`, com timeout.
    O próprio Postgres recusa escrita, mesmo escondida num `WITH … DELETE`.
-4. Recomendado: usuário `detro_readonly` (ver `create-readonly-role.sql`), que só tem
+4. Recomendado: usuário só de leitura (ver `create-readonly-role.sql`), que só tem
    `SELECT`. Mesmo um bug neste servidor não conseguiria escrever.
 
 ## Instalação
 ```bash
 git clone git@github.com:vitortrack/detro-mcp.git ~/Documentos/projects/detro-mcp
 cd ~/Documentos/projects/detro-mcp/context/database && npm install
-claude mcp add detro-db -s user -e 'DATABASE_URL=${DETRO_DB_URL:-postgres://detro_readonly:detro_readonly@127.0.0.1:5432/detrorj}' -- node "$PWD/server.mjs"
+claude mcp add detro-db -s user -e 'DATABASE_URL=${DETRO_DB_URL}' -- node "$PWD/server.mjs"
 ```
-Com `-s user` o servidor aparece em qualquer pasta, junto dos outros MCPs. Para
-apontar para outro banco, defina `DETRO_DB_URL` no shell. Confira com `/mcp`.
+Com `-s user` o servidor aparece em qualquer pasta, junto dos outros MCPs. A
+conexão vem de `DETRO_DB_URL`, definida no shell (exemplo no README da raiz).
+Confira com `/mcp`.
 
 ## Variáveis
-- `DATABASE_URL`: conexão (vem do `.mcp.json`)
+- `DATABASE_URL`: conexão, vinda de `DETRO_DB_URL` (ver README da raiz)
 - `MCP_DB_MAX_ROWS`: limite de linhas (padrão 200)
 - `MCP_DB_TIMEOUT_MS`: timeout por consulta (padrão 10000)
