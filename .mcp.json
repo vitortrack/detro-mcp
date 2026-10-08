@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "detro-db": {
+      "command": "node",
+      "args": ["db-readonly/server.mjs"],
+      "env": {
+        "DATABASE_URL": "${DETRO_DB_URL:-postgres://detro_readonly:detro_readonly@127.0.0.1:5432/detrorj}"
+      }
+    }
+  }
+}

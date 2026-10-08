@@ -1,0 +1,13 @@
+{
+  "name": "detro-db-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP stdio somente leitura para o Postgres de desenvolvimento do detrorjweb",
+  "main": "server.mjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "pg": "^8.13.0",
+    "zod": "^3.23.0"
+  }
+}
