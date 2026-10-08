@@ -1,6 +1,6 @@
 -- Usuário somente leitura para o MCP detro-db. Rode UMA vez no banco de DEV:
 --   docker exec -i udp-postgres psql -U tracker -d tracker -v ON_ERROR_STOP=1 \
---     < db-readonly/create-readonly-role.sql
+--     < context/database/create-readonly-role.sql
 -- Rode com o usuário dono das tabelas (tracker, o mesmo da API), para que o
 -- ALTER DEFAULT PRIVILEGES valha também para tabelas criadas depois.
 -- NÃO é um arquivo de db/init. Pode rodar de novo sem problema.
