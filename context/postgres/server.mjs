@@ -29,10 +29,19 @@ function assertSafeTarget(url) {
 assertSafeTarget(DATABASE_URL);
 const pool = new pg.Pool({ connectionString: DATABASE_URL, max: 2 });
 
-function assertSingleReadStatement(sql) {
+const WRITE_URL = process.env.DATABASE_URL_ESCRITA;
+if (WRITE_URL) assertSafeTarget(WRITE_URL);
+const writePool = WRITE_URL ? new pg.Pool({ connectionString: WRITE_URL, max: 1 }) : null;
+
+function assertSingleStatement(sql) {
   const body = sql.trim().replace(/;\s*$/, "");
   if (!body) throw new Error("SQL vazio.");
   if (body.includes(";")) throw new Error("Envie apenas um comando por vez.");
+  return body;
+}
+
+function assertSingleReadStatement(sql) {
+  const body = assertSingleStatement(sql);
   if (!/^(select|with|values|table|show|explain)\b/i.test(body)) {
     throw new Error("Somente consultas de leitura (SELECT, WITH, VALUES, SHOW, EXPLAIN).");
   }
@@ -47,6 +56,25 @@ async function readOnly(fn) {
     return await fn(client);
   } finally {
     await client.query("ROLLBACK").catch(() => {});
+    client.release();
+  }
+}
+
+async function committed(fn) {
+  if (!writePool) {
+    throw new Error("Escrita desativada: defina DATABASE_URL_ESCRITA no .env com um usuário que possa escrever.");
+  }
+  const client = await writePool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL statement_timeout = ${Math.trunc(TIMEOUT_MS)}`);
+    const res = await fn(client);
+    await client.query("COMMIT");
+    return res;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
     client.release();
   }
 }
@@ -220,8 +248,35 @@ server.registerTool(
   },
 );
 
+server.registerTool(
+  "executar",
+  {
+    title: "Executar (altera o banco)",
+    description:
+      `Executa UM comando que altera o banco de desenvolvimento (INSERT, UPDATE, DELETE, CREATE, ALTER…) e grava (COMMIT), com timeout de ${TIMEOUT_MS / 1000}s. Se der erro, nada é gravado. Use RETURNING para ver as linhas afetadas. Para leitura, use consultar.`,
+    inputSchema: {
+      sql: z.string().describe("Um único comando. Use $1, $2… para valores."),
+      parametros: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional()
+        .describe("Valores para $1, $2…"),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  async ({ sql, parametros }) => {
+    try {
+      const body = assertSingleStatement(sql);
+      const res = await committed((c) => run(c, body, parametros ?? []));
+      const rows = res.rows ?? [];
+      const summary = `${res.command} — ${res.rowCount ?? 0} linha(s) afetada(s)`;
+      return ok(rows.length ? `${summary}\n\n${asTable(rows.slice(0, MAX_ROWS))}` : summary);
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
 const shutdown = async () => {
   await pool.end().catch(() => {});
+  await writePool?.end().catch(() => {});
   process.exit(0);
 };
 process.on("SIGINT", shutdown);

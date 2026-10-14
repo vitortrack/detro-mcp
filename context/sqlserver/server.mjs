@@ -42,12 +42,47 @@ function configFrom(url) {
 const pool = new sql.ConnectionPool(configFrom(DATABASE_URL));
 const ready = pool.connect();
 
-function assertSingleReadStatement(text) {
+const WRITE_URL = process.env.DATABASE_URL_ESCRITA;
+const writeConfig = WRITE_URL ? configFrom(WRITE_URL) : null;
+let writeReady;
+
+function writer() {
+  if (!writeConfig) {
+    throw new Error("Escrita desativada: defina DATABASE_URL_ESCRITA no .env com um login que possa escrever.");
+  }
+  writeReady ??= new sql.ConnectionPool(writeConfig).connect().catch((e) => {
+    writeReady = undefined;
+    throw e;
+  });
+  return writeReady;
+}
+
+function assertSingleStatement(text) {
   const body = text.trim().replace(/;\s*$/, "");
   if (!body) throw new Error("SQL vazio.");
   if (body.includes(";")) throw new Error("Envie apenas um comando por vez.");
+  return body;
+}
+
+function assertSingleReadStatement(text) {
+  const body = assertSingleStatement(text);
   if (!/^(select|with)\b/i.test(body)) throw new Error("Somente consultas de leitura (SELECT, WITH).");
   return body;
+}
+
+async function committed(text, values) {
+  const tx = new sql.Transaction(await writer());
+  await tx.begin();
+  try {
+    const req = new sql.Request(tx);
+    values.forEach((v, i) => req.input(`p${i + 1}`, v));
+    const res = await req.query(text);
+    await tx.commit();
+    return res;
+  } catch (e) {
+    await tx.rollback().catch(() => {});
+    throw e;
+  }
 }
 
 async function rolledBack(fn) {
@@ -265,8 +300,33 @@ server.registerTool(
   },
 );
 
+server.registerTool(
+  "executar",
+  {
+    title: "Executar (altera o banco)",
+    description:
+      `Executa UM comando que altera o SQL Server de desenvolvimento (INSERT, UPDATE, DELETE, CREATE, ALTER…) e grava (COMMIT), com timeout de ${TIMEOUT_MS / 1000}s. Se der erro, nada é gravado. Use OUTPUT inserted.*/deleted.* para ver as linhas afetadas. Para leitura, use consultar.`,
+    inputSchema: {
+      sql: z.string().describe("Um único comando. Use @p1, @p2… para valores."),
+      parametros: PARAMS.describe("Valores para @p1, @p2…"),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  async ({ sql: text, parametros }) => {
+    try {
+      const res = await committed(assertSingleStatement(text), parametros ?? []);
+      const rows = res.recordset ?? [];
+      const summary = `${res.rowsAffected.reduce((a, b) => a + b, 0)} linha(s) afetada(s)`;
+      return ok(rows.length ? `${summary}\n\n${asTable(rows.slice(0, MAX_ROWS))}` : summary);
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
 const shutdown = async () => {
   await pool.close().catch(() => {});
+  await writeReady?.then((p) => p.close()).catch(() => {});
   process.exit(0);
 };
 process.on("SIGINT", shutdown);
