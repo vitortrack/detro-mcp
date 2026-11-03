@@ -7,6 +7,7 @@ seu servidor em `context/<banco>/`, com README próprio. Instale só os que usar
 |---|---|---|
 | `detro-db` | [`context/postgres`](context/postgres/README.md) | consultas no Postgres de dev (escrita opcional) |
 | `detro-sqlserver` | [`context/sqlserver`](context/sqlserver/README.md) | consultas no SQL Server de dev (escrita opcional) |
+| `detro-ollama` | `context/ollama` | manda leitura e resumo ao Ollama para economizar contexto do Claude |
 
 Os dois têm as mesmas ferramentas (`listar_tabelas`, `descrever_tabela`,
 `consultar`, `explicar_consulta`, `executar`), cada um no seu banco.
@@ -192,6 +193,41 @@ Caracteres especiais na senha (`@`, `#`, `/`, `?`, `%`) precisam ser codificados
 cd ~/Documentos/projects/detro-mcp/context/sqlserver
 claude mcp add detro-sqlserver -s user -- node "$PWD/server.mjs"
 ```
+
+---
+
+## Ollama (`detro-ollama`)
+
+Tira do contexto do Claude o que é só leitura: o comando roda aqui, a saída vai
+para o Ollama e o Claude recebe só o código de saída e a resposta.
+
+| Ferramenta | O que faz |
+|---|---|
+| `run_digest` | Roda um comando da lista permitida e responde uma pergunta sobre a saída |
+| `ollama_ask` | Manda um prompt a um modelo do Ollama |
+
+Requer o [Ollama](https://ollama.com) rodando em `127.0.0.1:11434`, logado na
+conta para o modelo cloud padrão (`ollama signin`), e o modelo local baixado
+(`ollama pull qwen2.5-coder:7b`).
+
+```bash
+cd ~/Documentos/projects/detro-mcp/context/ollama && npm install
+claude mcp add detro-ollama -s user -- node "$PWD/server.mjs"
+```
+
+Opcional, em `context/ollama/.env`:
+
+```bash
+OLLAMA_MODEL=glm-5.3-flash:cloud     # modelo padrão
+OLLAMA_LOCAL_MODEL=qwen2.5-coder:7b # usado em docker logs, que trazem dado pessoal
+OLLAMA_NUM_CTX=32768                 # janela do modelo; saída maior é cortada pelo começo
+OLLAMA_MCP_COMMANDS=npx tsc,npm run,docker logs   # substitui a lista permitida
+OLLAMA_MCP_COMMAND_TIMEOUT_MS=600000
+```
+
+Modelos `:cloud` mandam o texto para o servidor do Ollama. `docker logs` sempre
+roda no modelo local, mesmo que o pedido diga outro; fora disso, não use cloud
+com resultado de banco ou qualquer dado pessoal. A resposta diz qual modelo foi usado.
 
 ---
 

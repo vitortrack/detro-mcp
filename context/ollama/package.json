@@ -1,0 +1,12 @@
+{
+  "name": "detro-ollama-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP stdio que manda leitura e resumo ao Ollama (local ou cloud) para economizar contexto do Claude Code",
+  "main": "server.mjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  }
+}
