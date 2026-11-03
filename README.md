@@ -7,7 +7,7 @@ seu servidor em `context/<banco>/`, com README próprio. Instale só os que usar
 |---|---|---|
 | `detro-db` | [`context/postgres`](context/postgres/README.md) | consultas no Postgres de dev (escrita opcional) |
 | `detro-sqlserver` | [`context/sqlserver`](context/sqlserver/README.md) | consultas no SQL Server de dev (escrita opcional) |
-| `detro-ollama` | `context/ollama` | manda leitura e resumo ao Ollama para economizar contexto do Claude |
+| `detro-ollama` | [`context/ollama`](context/ollama/README.md) | manda leitura e resumo ao Ollama para economizar contexto do Claude |
 
 Os dois têm as mesmas ferramentas (`listar_tabelas`, `descrever_tabela`,
 `consultar`, `explicar_consulta`, `executar`), cada um no seu banco.
