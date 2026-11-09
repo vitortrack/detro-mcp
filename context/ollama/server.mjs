@@ -3,8 +3,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 
 const ENV_FILE = new URL(".env", import.meta.url);
 if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
@@ -28,6 +29,90 @@ const SHELL_CHARS = /[;&|<>$`'"\\\n]/;
 const SYSTEM =
   "Responda em pt-BR, de forma curta e factual. Use só o que está no texto. " +
   "Cite arquivo:linha quando o texto trouxer. Se não houver o que pedem, diga isso. Não invente.";
+
+const ROOT = process.cwd();
+const MAX_STEPS = 10;
+const MAX_TOOL_CHARS = 12000;
+const BLOCKED = /(^|\/)(\.env[^/]*|backups\/.*|certs\/.*|[^/]*\.(pem|key))$/;
+const TOOLS_HINT =
+  "Você tem ferramentas para vasculhar o projeto: list_files, search e read_file. " +
+  "Elas respeitam .gitignore e .ignore e não abrem .env, backups nem certificados. " +
+  "Pergunta sobre o projeto: busque e leia antes de responder; as regras do projeto estão em CLAUDE.md " +
+  "(e no CLAUDE.md da subpasta, que vence o da raiz).";
+
+async function projectFiles() {
+  const list = async (...args) =>
+    (await runCommand(["git", "ls-files", "-c", "-o", ...args], ROOT)).output.split("\n").filter(Boolean);
+  const hidden = new Set(await list("-i", "--exclude-per-directory=.ignore"));
+  return (await list("--exclude-standard")).filter((f) => !hidden.has(f) && !BLOCKED.test(f));
+}
+
+const cap = (text) =>
+  !text ? "(nada encontrado)" : text.length > MAX_TOOL_CHARS ? `${text.slice(0, MAX_TOOL_CHARS)}\n[cortado: refine o filtro]` : text;
+
+const globRegex = (glob) =>
+  new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\/?/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]").replace(/\u0000/g, ".*")}$`);
+
+const PROJECT_TOOLS = {
+  async list_files({ glob }) {
+    const files = await projectFiles();
+    return cap((glob ? files.filter((f) => globRegex(glob).test(f)) : files).join("\n"));
+  },
+  async search({ pattern, glob }) {
+    const regex = new RegExp(pattern, "i");
+    const files = (await projectFiles()).filter((f) => !glob || globRegex(glob).test(f));
+    const hits = [];
+    for (const file of files) {
+      const text = await readFile(resolve(ROOT, file), "utf8").catch(() => "");
+      if (text.includes("\u0000")) continue;
+      text.split("\n").forEach((line, i) => regex.test(line) && hits.push(`${file}:${i + 1}: ${line.trim().slice(0, 200)}`));
+      if (hits.length >= 200) break;
+    }
+    return cap(hits.join("\n"));
+  },
+  async read_file({ path, offset = 1, limit = 300 }) {
+    const file = relative(ROOT, resolve(ROOT, path));
+    if (!(await projectFiles()).includes(file)) return "Arquivo fora do projeto, ignorado ou bloqueado. Use list_files para ver os disponíveis.";
+    const lines = (await readFile(resolve(ROOT, file), "utf8")).split("\n");
+    return cap(lines.slice(offset - 1, offset - 1 + limit).map((l, i) => `${offset + i}\t${l}`).join("\n"));
+  },
+};
+
+const toolSpec = (name, description, properties, required = []) => ({
+  type: "function",
+  function: { name, description, parameters: { type: "object", properties, required } },
+});
+const GLOB = { type: "string", description: "Filtro de caminho, ex.: 'api/src/**/*.ts'" };
+const TOOL_SPECS = [
+  toolSpec("list_files", "Lista os arquivos do projeto", { glob: GLOB }),
+  toolSpec("search", "Busca regex (sem diferenciar maiúsculas) no conteúdo; devolve arquivo:linha: texto", { pattern: { type: "string" }, glob: GLOB }, ["pattern"]),
+  toolSpec("read_file", "Lê um arquivo com número de linha", { path: { type: "string" }, offset: { type: "number" }, limit: { type: "number" } }, ["path"]),
+];
+
+async function chat(messages, model, tools) {
+  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, stream: false, messages, tools, options: { num_ctx: NUM_CTX, temperature: 0 } }),
+    signal: AbortSignal.timeout(COMMAND_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`Ollama respondeu ${res.status}: ${await res.text()}`);
+  return (await res.json()).message;
+}
+
+async function askWithProject(prompt, model, system = SYSTEM) {
+  const messages = [{ role: "system", content: `${system}\n${TOOLS_HINT}` }, { role: "user", content: prompt }];
+  for (let step = 1; ; step++) {
+    const message = await chat(messages, model, step < MAX_STEPS ? TOOL_SPECS : undefined);
+    messages.push(message);
+    if (!message.tool_calls?.length) return message.content.trim();
+    for (const { function: call } of message.tool_calls) {
+      const tool = PROJECT_TOOLS[call.name];
+      const content = tool ? await tool(call.arguments ?? {}).catch((e) => `Erro: ${e.message}`) : `Ferramenta desconhecida: ${call.name}`;
+      messages.push({ role: "tool", tool_name: call.name, content });
+    }
+  }
+}
 
 const CONTEXT = z
   .string()
@@ -147,7 +232,7 @@ server.registerTool(
   {
     title: "Perguntar ao Ollama",
     description:
-      "Manda um prompt a um modelo do Ollama e devolve a resposta. Só economiza contexto quando o prompt é curto e a resposta substitui trabalho seu (rascunho de texto, segunda opinião sobre um trecho que você já tem). Não leia um arquivo grande só para colar aqui: o contexto já foi gasto. Trate a resposta como pista, não como fato.",
+      "Manda um prompt a um modelo do Ollama e devolve a resposta. O modelo vasculha o projeto sozinho (lista, busca e lê arquivos, respeitando .gitignore/.ignore, sem .env, backups nem certificados), então pergunte direto ('onde fica X?', 'quem chama Y?') sem colar código. Trate a resposta como pista: confira arquivo:linha na fonte.",
     inputSchema: {
       prompt: z.string().describe("O pedido completo"),
       model: MODEL,
@@ -161,7 +246,7 @@ server.registerTool(
     try {
       const thread = openThread(id, context);
       const chosen = pickModel(thread, model, false);
-      const answer = await generate(threadPrefix(thread) + prompt, chosen, system);
+      const answer = await askWithProject(threadPrefix(thread) + prompt, chosen, system);
       remember(thread, prompt, answer);
       return ok(`Modelo: ${chosen}\n${answer}`);
     } catch (e) {

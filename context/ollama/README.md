@@ -9,7 +9,7 @@ código de saída e a resposta curta.
 | Ferramenta | Para quê |
 |---|---|
 | `run_digest` | roda um comando da lista permitida e responde uma pergunta sobre a saída |
-| `ollama_ask` | manda um prompt livre a um modelo do Ollama (rascunho, segunda opinião) |
+| `ollama_ask` | pergunta livre; o modelo vasculha o projeto sozinho (`list_files`, `search`, `read_file`), respeitando `.gitignore` e `.ignore`, sem `.env`, `backups/` nem certificados |
 
 ## Divisão de trabalho com o Claude
 
