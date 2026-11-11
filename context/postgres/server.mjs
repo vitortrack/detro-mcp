@@ -3,7 +3,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import pg from "pg";
 import { z } from "zod";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { createConnection, createServer } from "node:net";
 
 const ENV_FILE = new URL(".env", import.meta.url);
 if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
@@ -33,6 +35,69 @@ const WRITE_URL = process.env.DATABASE_URL_ESCRITA;
 if (WRITE_URL) assertSafeTarget(WRITE_URL);
 const writePool = WRITE_URL ? new pg.Pool({ connectionString: WRITE_URL, max: 1 }) : null;
 
+const STAGING_URL = process.env.DATABASE_URL_STAGING;
+const STAGING_SSH = process.env.STAGING_SSH;
+const STAGING_CA = new URL("certs/rds-global-bundle.pem", import.meta.url);
+let stagingPool = null;
+let stagingTunnel = null;
+
+const freePort = () =>
+  new Promise((resolve, reject) => {
+    const srv = createServer().on("error", reject).listen(0, "127.0.0.1", () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
+
+const portOpen = (port) =>
+  new Promise((resolve) => {
+    const sock = createConnection({ host: "127.0.0.1", port })
+      .on("connect", () => { sock.end(); resolve(true); })
+      .on("error", () => resolve(false));
+  });
+
+async function openStaging() {
+  if (!STAGING_URL || !STAGING_SSH) {
+    throw new Error("Staging desativado: defina DATABASE_URL_STAGING e STAGING_SSH no .env.");
+  }
+  const url = new URL(STAGING_URL);
+  const rdsHost = url.hostname;
+  const port = await freePort();
+  let stderr = "";
+  const tunnel = spawn(
+    "ssh",
+    ["-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
+     "-L", `127.0.0.1:${port}:${rdsHost}:${url.port || 5432}`, ...STAGING_SSH.trim().split(/\s+/)],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+  tunnel.stderr.on("data", (d) => { stderr += d; });
+  let exited = false;
+  tunnel.on("exit", () => { exited = true; stagingPool?.end().catch(() => {}); stagingPool = null; stagingTunnel = null; });
+  for (let i = 0; i < 30 && !exited && !(await portOpen(port)); i++) await new Promise((ok) => setTimeout(ok, 500));
+  if (exited || !(await portOpen(port))) {
+    tunnel.kill();
+    throw new Error(`Túnel SSH para staging não abriu. ${stderr.trim()}`);
+  }
+  url.hostname = "127.0.0.1";
+  url.port = String(port);
+  stagingTunnel = tunnel;
+  stagingPool = new pg.Pool({
+    connectionString: url.toString(),
+    max: 2,
+    ssl: { ca: readFileSync(STAGING_CA), servername: rdsHost },
+  });
+  log(`túnel de staging aberto na porta ${port}`);
+}
+
+async function poolFor(banco) {
+  if (banco !== "staging") return pool;
+  if (!stagingPool) await openStaging();
+  return stagingPool;
+}
+
+const BANCO = z.enum(["local", "staging"]).optional()
+  .describe("Banco consultado: 'local' (padrão, desenvolvimento) ou 'staging' (só quando o usuário pedir staging explicitamente).");
+
 function assertSingleStatement(sql) {
   const body = sql.trim().replace(/;\s*$/, "");
   if (!body) throw new Error("SQL vazio.");
@@ -48,8 +113,8 @@ function assertSingleReadStatement(sql) {
   return body;
 }
 
-async function readOnly(fn) {
-  const client = await pool.connect();
+async function readOnly(fn, banco) {
+  const client = await (await poolFor(banco)).connect();
   try {
     await client.query("BEGIN TRANSACTION READ ONLY");
     await client.query(`SET LOCAL statement_timeout = ${Math.trunc(TIMEOUT_MS)}`);
@@ -60,11 +125,16 @@ async function readOnly(fn) {
   }
 }
 
-async function committed(fn) {
+async function writePoolFor(banco) {
+  if (banco === "staging") return poolFor(banco);
   if (!writePool) {
     throw new Error("Escrita desativada: defina DATABASE_URL_ESCRITA no .env com um usuário que possa escrever.");
   }
-  const client = await writePool.connect();
+  return writePool;
+}
+
+async function committed(fn, banco) {
+  const client = await (await writePoolFor(banco)).connect();
   try {
     await client.query("BEGIN");
     await client.query(`SET LOCAL statement_timeout = ${Math.trunc(TIMEOUT_MS)}`);
@@ -106,10 +176,11 @@ server.registerTool(
       "Lista tabelas, views e materialized views do banco de desenvolvimento do detrorjweb, com estimativa de linhas. Use para descobrir onde um dado mora antes de consultar. A estimativa vem das estatísticas do Postgres e pode estar desatualizada ou desconhecida: nunca conclua que uma tabela está vazia por ela; para afirmar quantidade, use consultar com count(*).",
     inputSchema: {
       filtro: z.string().optional().describe("Parte do nome para filtrar, ex.: 'refuel', 'student'"),
+      banco: BANCO,
     },
     annotations: READ_ONLY,
   },
-  async ({ filtro }) => {
+  async ({ filtro, banco }) => {
     try {
       const { rows } = await readOnly((c) =>
         run(
@@ -126,6 +197,7 @@ server.registerTool(
             ORDER BY 1, 2`,
           [filtro ?? null],
         ),
+        banco,
       );
       return ok(asTable(rows));
     } catch (e) {
@@ -142,10 +214,11 @@ server.registerTool(
       "Mostra colunas (tipo, nulo, default), constraints (PK, FK, UNIQUE, CHECK) e índices de uma tabela ou view. Use antes de escrever query, migration ou tradução em pg-errors.ts.",
     inputSchema: {
       tabela: z.string().describe("Nome da tabela, opcionalmente com schema: 'vehicle_refuels' ou 'public.vehicle_refuels'"),
+      banco: BANCO,
     },
     annotations: READ_ONLY,
   },
-  async ({ tabela }) => {
+  async ({ tabela, banco }) => {
     try {
       const [schema, name] = tabela.includes(".") ? tabela.split(".", 2) : ["public", tabela];
       const out = await readOnly(async (c) => {
@@ -186,7 +259,7 @@ server.registerTool(
           "### Constraints", asTable(cons.rows),
           "### Índices", asTable(idx.rows),
         ].join("\n\n");
-      });
+      }, banco);
       return ok(out);
     } catch (e) {
       return fail(e);
@@ -204,13 +277,14 @@ server.registerTool(
       sql: z.string().describe("Uma única consulta SELECT/WITH. Use $1, $2… para valores."),
       parametros: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional()
         .describe("Valores para $1, $2…"),
+      banco: BANCO,
     },
     annotations: READ_ONLY,
   },
-  async ({ sql, parametros }) => {
+  async ({ sql, parametros, banco }) => {
     try {
       const body = assertSingleReadStatement(sql);
-      const res = await readOnly((c) => run(c, body, parametros ?? []));
+      const res = await readOnly((c) => run(c, body, parametros ?? []), banco);
       const rows = res.rows ?? [];
       const cut = rows.length > MAX_ROWS;
       const shown = cut ? rows.slice(0, MAX_ROWS) : rows;
@@ -233,14 +307,15 @@ server.registerTool(
     inputSchema: {
       sql: z.string().describe("Uma única consulta SELECT/WITH, sem o EXPLAIN na frente."),
       parametros: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+      banco: BANCO,
     },
     annotations: READ_ONLY,
   },
-  async ({ sql, parametros }) => {
+  async ({ sql, parametros, banco }) => {
     try {
       const body = assertSingleReadStatement(sql);
       if (/^explain\b/i.test(body)) throw new Error("Envie a consulta sem EXPLAIN; ele é adicionado aqui.");
-      const res = await readOnly((c) => run(c, `EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${body}`, parametros ?? []));
+      const res = await readOnly((c) => run(c, `EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${body}`, parametros ?? []), banco);
       return ok(res.rows.map((r) => r["QUERY PLAN"]).join("\n"));
     } catch (e) {
       return fail(e);
@@ -258,13 +333,14 @@ server.registerTool(
       sql: z.string().describe("Um único comando. Use $1, $2… para valores."),
       parametros: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional()
         .describe("Valores para $1, $2…"),
+      banco: BANCO,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
-  async ({ sql, parametros }) => {
+  async ({ sql, parametros, banco }) => {
     try {
       const body = assertSingleStatement(sql);
-      const res = await committed((c) => run(c, body, parametros ?? []));
+      const res = await committed((c) => run(c, body, parametros ?? []), banco);
       const rows = res.rows ?? [];
       const summary = `${res.command} — ${res.rowCount ?? 0} linha(s) afetada(s)`;
       return ok(rows.length ? `${summary}\n\n${asTable(rows.slice(0, MAX_ROWS))}` : summary);
@@ -277,10 +353,12 @@ server.registerTool(
 const shutdown = async () => {
   await pool.end().catch(() => {});
   await writePool?.end().catch(() => {});
+  await stagingPool?.end().catch(() => {});
+  stagingTunnel?.kill();
   process.exit(0);
 };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 await server.connect(new StdioServerTransport());
-log(`pronto (${new URL(DATABASE_URL).hostname}, máx. ${MAX_ROWS} linhas, timeout ${TIMEOUT_MS}ms)`);
+log(`pronto (${new URL(DATABASE_URL).hostname}${STAGING_URL && STAGING_SSH ? " + staging sob demanda" : ""}, máx. ${MAX_ROWS} linhas, timeout ${TIMEOUT_MS}ms)`);

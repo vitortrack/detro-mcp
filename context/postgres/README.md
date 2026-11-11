@@ -28,6 +28,27 @@ Dá ao Claude Code ferramentas para olhar o banco de dev e, opcionalmente, grava
   der certo (erro = nada gravado).
 - Para pedir confirmação a cada uso: `"ask": ["mcp__detro-db__executar"]`.
 
+## Staging (sob demanda)
+As quatro ferramentas de leitura e `executar` aceitam `banco: "staging"`. Sem o
+parâmetro, é sempre o banco local. Em staging, `executar` grava com o usuário de
+`DATABASE_URL_STAGING`.
+
+- O RDS de staging só é alcançável de dentro da AWS. No primeiro uso, o MCP abre
+  um túnel `ssh -N -L` pelo servidor de staging numa porta livre local, e o fecha
+  quando o MCP encerra.
+- TLS validado de verdade: certificado conferido contra a cadeia oficial do RDS
+  (`certs/rds-global-bundle.pem`, de
+  https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem) e contra o
+  nome real do host do RDS.
+- As mesmas travas do banco local: um comando por chamada, timeout; leitura em
+  `BEGIN READ ONLY` + `ROLLBACK`.
+
+No `.env` desta pasta:
+```bash
+DATABASE_URL_STAGING=postgres://<usuário de leitura>:<senha>@<host do RDS>:5432/<banco>
+STAGING_SSH=-i /caminho/para/chave.pem ubuntu@<ip do servidor de staging>
+```
+
 ## Instalação
 ```bash
 git clone git@github.com:vitortrack/detro-mcp.git ~/Documentos/projects/detro-mcp
@@ -41,5 +62,6 @@ conexão vem do `.env` desta pasta. Criação dos usuários (leitura e escrita) 
 ## Variáveis
 - `DATABASE_URL`: conexão somente leitura, lida de `.env` nesta pasta (variável já definida no ambiente tem prioridade)
 - `DATABASE_URL_ESCRITA`: conexão de escrita, opcional; liga `executar`
+- `DATABASE_URL_STAGING` e `STAGING_SSH`: opcionais; ligam `banco: "staging"` na leitura e no `executar`
 - `MCP_DB_MAX_ROWS`: limite de linhas (padrão 200)
 - `MCP_DB_TIMEOUT_MS`: timeout por consulta (padrão 10000)
